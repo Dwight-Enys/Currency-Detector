@@ -7,12 +7,10 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
-// Multer config – store in memory, max 10MB
 const storage = multer.memoryStorage();
 const upload = multer({
   storage,
@@ -24,50 +22,7 @@ const upload = multer({
   },
 });
 
-// Currency detection endpoint
-app.post("/api/detect", upload.single("image"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: "No image provided." });
-    }
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey || apiKey === "your_api_key_here") {
-      return res.status(500).json({
-        success: false,
-        error: "API key not configured. Please set ANTHROPIC_API_KEY in your .env file.",
-      });
-    }
-
-    const base64Image = req.file.buffer.toString("base64");
-    const mediaType = req.file.mimetype;
-
-    // Call Claude Vision API
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1024,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: mediaType,
-                  data: base64Image,
-                },
-              },
-              {
-                type: "text",
-                text: `You are an expert currency recognition AI. Analyze this image carefully and identify any money/currency present.
+const PROMPT = `You are an expert currency recognition AI. Analyze this image carefully and identify any money/currency present.
 
 Return ONLY a valid JSON object (no markdown, no explanation) with this exact structure:
 {
@@ -99,13 +54,53 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this exact st
 }
 
 If no currency is detected, set "detected" to false and return empty arrays.
-Detect ALL currencies you can see, including: USD, EUR, GBP, GHS (Cedi), KWD (Kuwaiti Dinar), NGN (Naira), JPY, CNY, INR, AUD, CAD, and any other world currency.`,
-              },
-            ],
+Detect ALL currencies you can see, including: USD, EUR, GBP, GHS (Cedi), KWD (Kuwaiti Dinar), NGN (Naira), JPY, CNY, INR, AUD, CAD, and any other world currency.`;
+
+// Currency detection endpoint
+app.post("/api/detect", upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: "No image provided." });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === "your_api_key_here") {
+      return res.status(500).json({
+        success: false,
+        error: "API key not configured. Please set GEMINI_API_KEY in your environment variables.",
+      });
+    }
+
+    const base64Image = req.file.buffer.toString("base64");
+    const mediaType = req.file.mimetype;
+
+    // Call Gemini Vision API
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  inline_data: {
+                    mime_type: mediaType,
+                    data: base64Image,
+                  },
+                },
+                { text: PROMPT },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 1024,
           },
-        ],
-      }),
-    });
+        }),
+      }
+    );
 
     if (!response.ok) {
       const errData = await response.json();
@@ -113,9 +108,8 @@ Detect ALL currencies you can see, including: USD, EUR, GBP, GHS (Cedi), KWD (Ku
     }
 
     const data = await response.json();
-    const rawText = data.content[0]?.text || "{}";
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
 
-    // Parse the JSON response
     let result;
     try {
       const cleaned = rawText.replace(/```json|```/g, "").trim();
@@ -135,7 +129,7 @@ Detect ALL currencies you can see, including: USD, EUR, GBP, GHS (Cedi), KWD (Ku
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
-    apiKeySet: !!(process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== "your_api_key_here"),
+    apiKeySet: !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "your_api_key_here"),
   });
 });
 
@@ -146,5 +140,5 @@ app.get("*", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n💰 Currency Detector running at http://localhost:${PORT}`);
-  console.log(`   API Key: ${process.env.ANTHROPIC_API_KEY ? "✓ Set" : "✗ Missing — set ANTHROPIC_API_KEY in .env"}\n`);
+  console.log(`   Gemini API Key: ${process.env.GEMINI_API_KEY ? "✓ Set" : "✗ Missing — set GEMINI_API_KEY in environment"}\n`);
 });
