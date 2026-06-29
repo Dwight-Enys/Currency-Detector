@@ -18,20 +18,20 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"];
     if (allowed.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only image files are allowed (JPEG, PNG, WebP, GIF)"));
+    else cb(new Error("Only image files are allowed"));
   },
 });
 
-const PROMPT = `You are an expert currency recognition AI. Analyze this image carefully and identify any money/currency present.
+const PROMPT = `You are an expert currency recognition AI. Analyze this image and identify any money/currency present.
 
 Return ONLY a valid JSON object (no markdown, no explanation) with this exact structure:
 {
   "detected": true or false,
   "currencies": [
     {
-      "currency_name": "Full currency name (e.g. Ghanaian Cedi, US Dollar, Kuwaiti Dinar)",
+      "currency_name": "Full currency name (e.g. Ghanaian Cedi, US Dollar)",
       "currency_code": "ISO code (e.g. GHS, USD, KWD)",
-      "symbol": "Currency symbol (e.g. ₵, $, د.ك)",
+      "symbol": "Currency symbol (e.g. ₵, $)",
       "country": "Country of origin",
       "denomination": "The denomination shown (e.g. 50, 100, 1)",
       "amount": numeric value as number,
@@ -53,54 +53,44 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this exact st
   "notes": "Any additional observations about the money"
 }
 
-If no currency is detected, set "detected" to false and return empty arrays.
-Detect ALL currencies you can see, including: USD, EUR, GBP, GHS (Cedi), KWD (Kuwaiti Dinar), NGN (Naira), JPY, CNY, INR, AUD, CAD, and any other world currency.`;
+If no currency is detected, set detected to false and return empty arrays.`;
 
-// Currency detection endpoint
 app.post("/api/detect", upload.single("image"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, error: "No image provided." });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey === "your_api_key_here") {
-      return res.status(500).json({
-        success: false,
-        error: "API key not configured. Please set GEMINI_API_KEY in your environment variables.",
-      });
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ success: false, error: "OPENROUTER_API_KEY not configured." });
     }
 
     const base64Image = req.file.buffer.toString("base64");
     const mediaType = req.file.mimetype;
 
-    // Call Gemini Vision API
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  inline_data: {
-                    mime_type: mediaType,
-                    data: base64Image,
-                  },
-                },
-                { text: PROMPT },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 1024,
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.0-flash-exp:free",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image_url",
+                image_url: { url: `data:${mediaType};base64,${base64Image}` },
+              },
+              { type: "text", text: PROMPT },
+            ],
           },
-        }),
-      }
-    );
+        ],
+      }),
+    });
 
     if (!response.ok) {
       const errData = await response.json();
@@ -108,14 +98,14 @@ app.post("/api/detect", upload.single("image"), async (req, res) => {
     }
 
     const data = await response.json();
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    const rawText = data.choices?.[0]?.message?.content || "{}";
 
     let result;
     try {
       const cleaned = rawText.replace(/```json|```/g, "").trim();
       result = JSON.parse(cleaned);
     } catch {
-      result = { detected: false, error: "Could not parse AI response", raw: rawText };
+      result = { detected: false, error: "Could not parse AI response" };
     }
 
     res.json({ success: true, result });
@@ -125,20 +115,15 @@ app.post("/api/detect", upload.single("image"), async (req, res) => {
   }
 });
 
-// Health check
 app.get("/api/health", (req, res) => {
-  res.json({
-    status: "ok",
-    apiKeySet: !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "your_api_key_here"),
-  });
+  res.json({ status: "ok", apiKeySet: !!process.env.OPENROUTER_API_KEY });
 });
 
-// Fallback to index.html
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 app.listen(PORT, () => {
   console.log(`\n💰 Currency Detector running at http://localhost:${PORT}`);
-  console.log(`   Gemini API Key: ${process.env.GEMINI_API_KEY ? "✓ Set" : "✗ Missing — set GEMINI_API_KEY in environment"}\n`);
+  console.log(`   OpenRouter Key: ${process.env.OPENROUTER_API_KEY ? "✓ Set" : "✗ Missing"}\n`);
 });
